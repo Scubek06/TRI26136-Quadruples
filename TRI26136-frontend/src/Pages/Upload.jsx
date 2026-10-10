@@ -1,6 +1,6 @@
 
 import { useCallback, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 const MAX_SIZE = 50 * 1024 * 1024;
@@ -47,6 +47,7 @@ function FileIcon({ extension }) {
 
 export default function Upload() {
   const inputRef = useRef(null);
+  const navigate = useNavigate();
 
   const [items, setItems] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -194,12 +195,26 @@ export default function Upload() {
         }
       }
 
-      setNotice({
-        type: failed ? "error" : "success",
-        text: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded successfully${
-          failed ? ` · ${failed} failed` : ""
-        }.`,
-      });
+     if (succeeded > 0 && failed === 0) {
+  setNotice({
+    type: "success",
+    text: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded successfully. Opening Explore...`,
+  });
+
+  // Let React show the success message before navigating.
+  setTimeout(() => {
+    navigate("/explore", {
+      state: { refresh: true },
+    });
+  }, 800);
+} else {
+  setNotice({
+    type: "error",
+    text: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded successfully${
+      failed ? ` · ${failed} failed` : ""
+    }. Please review the failed files and try again.`,
+  });
+}
     } catch (error) {
       setNotice({
         type: "error",
