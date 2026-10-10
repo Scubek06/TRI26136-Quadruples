@@ -1,6 +1,6 @@
-
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { supabase } from "./lib/supabase";
 
 const starterFiles = [
   { name: "customer_behavior.csv", rows: "24,580", status: "Ready" },
@@ -36,29 +36,90 @@ function ArrowIcon() {
   return <span aria-hidden="true" className="dp-arrow">↗</span>;
 }
 
+
 export default function App() {
   const navigate = useNavigate();
 
+  const [user, setUser] = useState(undefined);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [files, setFiles] = useState(starterFiles);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState("");
   const fileInput = useRef(null);
 
-  // Send users to login before opening protected features.
-  // The intended destination is passed to the login page.
-  function openFeature(path) {
-    const isAuthenticated =
-      localStorage.getItem("datapilot_authenticated") === "true";
+  useEffect(() => {
+    let active = true;
 
-    if (!isAuthenticated) {
-      navigate("/login", {
-        state: { from: { pathname: path } },
-      });
+    async function loadSession() {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (error) {
+        setAuthError("Unable to check your login session.");
+      }
+
+      setUser(data?.session?.user ?? null);
+    }
+
+    loadSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) {
+        setUser(session?.user ?? null);
+        setProfileOpen(false);
+      }
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    setAuthError("");
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      setAuthError(error.message);
       return;
     }
 
-    navigate(path);
+    setProfileOpen(false);
+    navigate("/");
   }
+
+  
+
+function openFeature(path) {
+  if (user === undefined) {
+    setNotice("Checking your login session. Please wait a moment.");
+    return;
+  }
+
+  if (user === null) {
+    navigate("/login", {
+      state: { from: { pathname: path } },
+      replace: true,
+    });
+    return;
+  }
+
+  setNotice("");
+  navigate(path);
+}
+
+
+
+
+  // Send users to login before opening protected features.
+  // The intended destination is passed to the login page.
+  
 
   const filteredFiles = useMemo(
     () =>
@@ -371,12 +432,89 @@ export default function App() {
           <a href="#workspace">Your workspace</a>
         </div>
 
-        <Link
-          to="/login"
-          className="group inline-flex min-h-[43px] items-center gap-3 rounded-[5px] bg-[#17291d] px-4 text-sm font-bold !text-white transition hover:-translate-y-0.5 hover:bg-[#304333] sm:px-5"
+        
+  {user === undefined ? (
+    <button
+      type="button"
+      disabled
+      className="dp-cta opacity-70"
+    >
+      Loading...
+    </button>
+  ) : user ? (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setProfileOpen((open) => !open)}
+        aria-label="Open your profile menu"
+        aria-expanded={profileOpen}
+        className="grid h-11 w-11 place-items-center rounded-full border-2 border-[#d7ff55] bg-[#17291d] text-sm font-extrabold uppercase text-white transition hover:bg-[#304333]"
+      >
+        {(user.user_metadata?.full_name || user.email || "U")
+          .trim()
+          .charAt(0)}
+      </button>
+
+      {profileOpen && (
+        <div
+          className="absolute right-0 top-[calc(100%+12px)] z-50 w-72 max-w-[calc(100vw-32px)] rounded-xl border border-[#dfe3d8] bg-white p-4 text-[#17211c] shadow-xl"
+          role="menu"
         >
-          Get started <ArrowIcon />
-        </Link>
+          <div className="flex items-center gap-3 border-b border-[#e8ebe3] pb-4">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#d7ff55] text-lg font-extrabold uppercase">
+              {(user.user_metadata?.full_name || user.email || "U")
+                .trim()
+                .charAt(0)}
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-extrabold">
+                {user.user_metadata?.full_name || "DataPilot User"}
+              </p>
+              <p className="break-all text-xs text-[#687365]">
+                {user.email}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setProfileOpen(false);
+              navigate("/profile");
+            }}
+            className="mt-3 w-full rounded-lg px-3 py-2.5 text-left text-sm font-semibold hover:bg-[#f5f6f0]"
+          >
+            View profile
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={handleLogout}
+            className="mt-1 w-full rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-red-700 hover:bg-red-50"
+          >
+            Log out
+          </button>
+
+          {authError && (
+            <p role="alert" className="mt-2 text-xs text-red-700">
+              {authError}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  ) : (
+    <Link
+      to="/login"
+      className="group inline-flex min-h-[43px] items-center gap-3 rounded-[5px] bg-[#17291d] px-4 text-sm font-bold !text-white transition hover:-translate-y-0.5 hover:bg-[#304333] sm:px-5"
+    >
+      Get started <ArrowIcon />
+    </Link>
+  )}
+
       </nav>
 
       <section id="home" className="dp-hero dp-wrap">
@@ -501,12 +639,14 @@ export default function App() {
             <p>Try the file picker to add CSV files to this session.</p>
           </div>
 
-          <button
-            className="dp-button"
-            onClick={() => openFeature("/upload")}
-          >
-            + Upload CSV
-          </button>
+          
+<button
+  className="dp-button"
+  onClick={() => openFeature("/upload")}
+>
+  + Upload CSV <ArrowIcon />
+</button>
+
         </div>
 
         {notice && (
