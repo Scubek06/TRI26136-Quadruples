@@ -1,0 +1,23 @@
+﻿# Python
+**/.venv/
+**/venv/
+**/__pycache__/
+*.py[cod]
+
+# Node.js
+**/node_modules/
+**/dist/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local editor and operating-system files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Share only the approved sample dataset
+Datasets/*
+!Datasets/sample_sales.csv
