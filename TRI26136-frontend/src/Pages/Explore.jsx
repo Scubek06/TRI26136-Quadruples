@@ -33,6 +33,9 @@ function FileIcon({ type }) {
 
 export default function Explore() {
   const location = useLocation();
+  const analysisResults = Array.isArray(location.state?.analysisResults)
+    ? location.state.analysisResults
+    : [];
 
   const [files, setFiles] = useState([]);
   const [user, setUser] = useState(null);
@@ -379,6 +382,62 @@ export default function Explore() {
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 15px;
           margin-bottom: 26px;
+        }
+
+        .ex-analysis {
+          margin-bottom: 26px;
+          padding: 24px;
+          border: 1px solid var(--ex-line);
+          border-radius: 17px;
+          background: white;
+        }
+
+        .ex-analysis-title {
+          margin: 0 0 16px;
+          font-size: 19px;
+          font-weight: 800;
+        }
+
+        .ex-analysis-file + .ex-analysis-file {
+          margin-top: 22px;
+          padding-top: 20px;
+          border-top: 1px solid #e9ede5;
+        }
+
+        .ex-analysis-file-title {
+          margin: 0 0 12px;
+          font-size: 15px;
+          overflow-wrap: anywhere;
+        }
+
+        .ex-analysis-metrics {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px 18px;
+          color: #59665d;
+          font-size: 12px;
+        }
+
+        .ex-analysis-report {
+          margin: 15px 0 0;
+          color: #344438;
+          font-size: 13px;
+          line-height: 1.8;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+        }
+
+        .ex-analysis-note {
+          margin: 12px 0 0;
+          color: #59665d;
+          font-size: 13px;
+        }
+
+        .ex-analysis-facts {
+          margin: 12px 0 0;
+          padding-left: 20px;
+          color: #59665d;
+          font-size: 12px;
         }
 
         .ex-stat {
@@ -920,6 +979,79 @@ export default function Explore() {
             <div className="ex-stat-caption">Spreadsheet datasets</div>
           </div>
         </section>
+
+        {location.state?.uploadNotice && (
+          <div className="ex-message" role="status">
+            {location.state.uploadNotice}
+          </div>
+        )}
+
+        {analysisResults.length > 0 && (
+          <section className="ex-analysis" aria-label="Latest analysis results">
+            <h2 className="ex-analysis-title">Latest dataset analysis</h2>
+            {analysisResults.map((item, index) => {
+              const worksheets = item.result?.worksheets
+                ? Object.entries(item.result.worksheets).map(
+                    ([name, result]) => ({
+                      ...result,
+                      worksheet: result.worksheet || name,
+                    })
+                  )
+                : item.result
+                  ? [item.result]
+                  : [];
+
+              return (
+                <article
+                  className="ex-analysis-file"
+                  key={`${item.fileName}-${index}`}
+                >
+                  <h3 className="ex-analysis-file-title">{item.fileName}</h3>
+                  {item.error ? (
+                    <p className="ex-analysis-note" role="alert">
+                      Analysis unavailable: {item.error}
+                    </p>
+                  ) : (
+                    worksheets.map((result) => (
+                      <div key={result.worksheet || item.fileName}>
+                        {result.worksheet && (
+                          <h4 className="ex-analysis-file-title">
+                            Worksheet: {result.worksheet}
+                          </h4>
+                        )}
+                        <div className="ex-analysis-metrics">
+                          <span>{result.rows} rows</span>
+                          <span>{result.column_count} columns</span>
+                          <span>{result.completeness_percent}% complete</span>
+                          <span>{result.duplicate_rows} duplicate rows</span>
+                        </div>
+                        <p className="ex-analysis-note">
+                          AI report: {result.ai_analysis?.status || "unavailable"}
+                          {result.ai_analysis?.message
+                            ? ` — ${result.ai_analysis.message}`
+                            : ""}
+                        </p>
+                        {result.ai_analysis?.insights && (
+                          <p className="ex-analysis-report">
+                            {result.ai_analysis.insights}
+                          </p>
+                        )}
+                        {Array.isArray(result.insights) &&
+                          result.insights.length > 0 && (
+                            <ul className="ex-analysis-facts">
+                              {result.insights.map((insight) => (
+                                <li key={insight}>{insight}</li>
+                              ))}
+                            </ul>
+                          )}
+                      </div>
+                    ))
+                  )}
+                </article>
+              );
+            })}
+          </section>
+        )}
 
         <section className="ex-panel">
           <div className="ex-panel-head">

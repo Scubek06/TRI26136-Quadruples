@@ -3,8 +3,9 @@ import { useCallback, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
-const MAX_SIZE = 50 * 1024 * 1024;
+const MAX_SIZE = 10 * 1024 * 1024;
 const ALLOWED = ["csv", "xls", "xlsx"];
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -27,7 +28,7 @@ function validateFile(file) {
   }
 
   if (file.size > MAX_SIZE) {
-    return "File exceeds the 50 MB limit.";
+    return "File exceeds the 10 MB analysis limit.";
   }
 
   if (file.size === 0) {
@@ -121,13 +122,63 @@ export default function Upload() {
 
       let succeeded = 0;
       let failed = 0;
+      const analysisResults = [];
 
       for (const item of ready) {
         updateItem(item.id, {
           status: "uploading",
-          progress: 10,
+          progress: 5,
           error: "",
         });
+
+        let analysis = null;
+        let analysisError = "";
+        const formData = new FormData();
+        formData.append("file", item.file);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+        try {
+          const response = await fetch(
+            `${API_BASE_URL.replace(/\/+$/, "")}/api/analyze-csv`,
+            {
+              method: "POST",
+              body: formData,
+              signal: controller.signal,
+            }
+          );
+          const responseBody = await response.json().catch(() => null);
+
+          if (!response.ok) {
+            const detail =
+              typeof responseBody?.detail === "string"
+                ? responseBody.detail
+                : `Analysis failed with HTTP ${response.status}.`;
+            throw new Error(detail);
+          }
+
+          if (!responseBody || typeof responseBody !== "object") {
+            throw new Error("The analysis API returned an invalid response.");
+          }
+          analysis = responseBody;
+        } catch (error) {
+          analysis = null;
+          analysisError =
+            error.name === "AbortError"
+              ? "Analysis timed out. The file was not analyzed."
+              : error instanceof TypeError
+                ? `Cannot reach the analysis API at ${API_BASE_URL}. Start the backend and try again.`
+                : error.message || "Analysis failed. Please try again.";
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        analysisResults.push({
+          fileName: item.name,
+          result: analysis,
+          error: analysisError,
+        });
+        updateItem(item.id, { progress: 35 });
 
         let uploadedPath = null;
 
@@ -150,7 +201,7 @@ export default function Upload() {
           if (storageError) throw storageError;
 
           uploadedPath = filePath;
-          updateItem(item.id, { progress: 75 });
+          updateItem(item.id, { progress: 70 });
 
           const { error: databaseError } = await supabase
             .from("datasets")
@@ -195,24 +246,30 @@ export default function Upload() {
         }
       }
 
-     if (succeeded > 0 && failed === 0) {
+     if (succeeded > 0) {
   setNotice({
-    type: "success",
-    text: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded successfully. Opening Explore...`,
+    type: failed === 0 ? "success" : "error",
+    text: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded successfully${
+      failed ? ` · ${failed} failed` : ""
+    }. Opening Explore...`,
   });
 
   // Let React show the success message before navigating.
   setTimeout(() => {
     navigate("/explore", {
-      state: { refresh: true },
+      state: {
+        refresh: true,
+        analysisResults,
+        uploadNotice: failed
+          ? `${succeeded} file${succeeded === 1 ? "" : "s"} saved; ${failed} could not be saved.`
+          : "",
+      },
     });
   }, 800);
 } else {
   setNotice({
     type: "error",
-    text: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded successfully${
-      failed ? ` · ${failed} failed` : ""
-    }. Please review the failed files and try again.`,
+    text: `No files were saved. ${failed} upload${failed === 1 ? "" : "s"} failed. Please review the failed files and try again.`,
   });
 }
     } catch (error) {
@@ -1121,7 +1178,7 @@ export default function Upload() {
               </div>
 
               <div className="up-max">
-                MAXIMUM FILE SIZE · 50 MB EACH
+                MAXIMUM FILE SIZE · 10 MB EACH
               </div>
             </div>
 
@@ -1219,8 +1276,8 @@ export default function Upload() {
                 disabled={busy || validCount === 0}
               >
                 {busy
-                  ? "Uploading your files…"
-                  : "↑  Upload to workspace"}
+                  ? "Analyzing and uploading…"
+                  : "↑  Analyze and upload"}
               </button>
 
               {notice && (
@@ -1260,7 +1317,7 @@ export default function Upload() {
 
                 <div className="up-stat">
                   <div className="up-stat-number">
-                    50<span style={{ fontSize: 16 }}> MB</span>
+                    10<span style={{ fontSize: 16 }}> MB</span>
                   </div>
                   <div className="up-stat-caption">Limit per file</div>
                 </div>
@@ -1290,7 +1347,7 @@ export default function Upload() {
                 </li>
                 <li>
                   <span className="up-check">✓</span>
-                  <span>Keep each file under 50 MB.</span>
+                  <span>Keep each file under 10 MB.</span>
                 </li>
                 <li>
                   <span className="up-check">✓</span>
