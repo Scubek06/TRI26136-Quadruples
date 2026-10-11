@@ -136,8 +136,8 @@ The commands below assume `frontend/` and `backend/` folders. If your files are 
 If this machine does not have the repository yet, copy the repository URL from GitHub and run:
 
 ```powershell
-git clone <YOUR_GITHUB_REPOSITORY_URL>
-cd <YOUR_REPOSITORY_FOLDER>
+git clone https://github.com/Scubek06/TRI26136-Quadruples
+cd https://github.com/Scubek06/TRI26136-Quadruples
 ```
 
 If the repository is already on this machine, open its existing folder instead. To update it safely:
