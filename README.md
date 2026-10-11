@@ -1,4 +1,4 @@
-# DataPilot AI
+# DataPilot AI - Xamine
 
 > An AI-assisted data quality and dataset analysis platform that helps users upload datasets, inspect data quality, and understand analysis results through a web dashboard.
 
@@ -166,7 +166,7 @@ If the repository does not include a schema or migration file, inspect the backe
 Open PowerShell at the repository root, then change to the directory containing `main.py` and `requirements.txt`. For the example structure:
 
 ```powershell
-cd backend
+cd TRI26136-Backend
 ```
 
 ### Create and activate a virtual environment
@@ -245,7 +245,7 @@ If the project defines a health endpoint, test that endpoint too. Do not assume 
 Open a **second** PowerShell terminal at the repository root and enter the directory containing `package.json`:
 
 ```powershell
-cd frontend
+cd TRI26136-frontend
 ```
 
 Install dependencies from the lockfile:
@@ -459,7 +459,7 @@ Commit your work or back it up before integrating remote changes. Avoid `git res
 A common deployment arrangement is:
 
 - **Frontend:** Vercel or another static frontend host
-- **Backend:** a Python-compatible application host
+- **Backend:** a Python-compatible application host(Render)
 - **Database and authentication:** Supabase
 
 Configure production environment variables in each host's dashboard; local `.env` files are not automatically uploaded. Set the frontend's `VITE_API_URL` to the public HTTPS API URL, configure backend CORS for the deployed frontend domain, and verify Supabase authentication redirects and access policies.
@@ -512,7 +512,7 @@ Install the prerequisites, configure local `.env` files, then follow the backend
 
 ## Maintainers
 
-**Project:** DataPilot AI  
+**Project:** DataPilot AI - Xamine
 **Repository:** Add your GitHub repository URL here.  
 **Team:** Add your team or organization details here.
 
