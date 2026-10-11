@@ -5,6 +5,7 @@ import {
   BrowserRouter,
   Routes,
   Route,
+  Navigate,
 } from "react-router-dom";
 
 import App from "./App.jsx";
@@ -16,9 +17,7 @@ import Upload from "./Pages/Upload.jsx";
 import "./index.css";
 
 function ProtectedPage({ children }) {
-  return (
-    <ProtectedRoute>{children}</ProtectedRoute>
-  );
+  return <ProtectedRoute>{children}</ProtectedRoute>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(
@@ -30,16 +29,41 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
         <Route
           path="/dashboard"
-          element={<ProtectedPage><Dashboard /></ProtectedPage>}
+          element={
+            <ProtectedPage>
+              <Dashboard />
+            </ProtectedPage>
+          }
         />
+
+        <Route
+          path="/dashboard/:fileId"
+          element={
+            <ProtectedPage>
+              <Dashboard />
+            </ProtectedPage>
+          }
+        />
+
         <Route
           path="/explore"
-          element={<ProtectedPage><Explore /></ProtectedPage>}
+          element={
+            <ProtectedPage>
+              <Explore />
+            </ProtectedPage>
+          }
         />
+
         <Route
           path="/upload"
-          element={<ProtectedPage><Upload /></ProtectedPage>}
+          element={
+            <ProtectedPage>
+              <Upload />
+            </ProtectedPage>
+          }
         />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>

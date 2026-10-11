@@ -1,18 +1,26 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
+const STORAGE_KEY = "datapilot-analysis-results";
+const BUCKET_NAME = "datasets";
+
 function formatSize(bytes = 0) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 ** 3) return `${(size / 1024 ** 2).toFixed(2)} MB`;
+  return `${(size / 1024 ** 3).toFixed(2)} GB`;
 }
 
 function formatDate(value) {
   if (!value) return "Unknown date";
-  return new Date(value).toLocaleString([], {
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+
+  return date.toLocaleString([], {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -23,22 +31,49 @@ function formatDate(value) {
 
 function fileType(file) {
   return (
-    file.original_filename?.split(".").pop()?.toUpperCase() || "FILE"
+    file?.original_filename?.split(".").pop()?.toUpperCase() || "FILE"
   );
 }
 
 function FileIcon({ type }) {
-  return <div className={`ex-file-icon ex-${type.toLowerCase()}`}>{type}</div>;
+  return (
+    <div className={`ex-file-icon ex-${type.toLowerCase()}`}>
+      {type}
+    </div>
+  );
+}
+
+function readSavedAnalysis() {
+  try {
+    const saved = sessionStorage.getItem(STORAGE_KEY);
+    if (!saved) return [];
+
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.error("Could not load saved analysis results:", error);
+    return [];
+  }
+}
+
+function getWorksheets(result) {
+  if (result?.worksheets && typeof result.worksheets === "object") {
+    return Object.entries(result.worksheets).map(([name, worksheet]) => ({
+      ...worksheet,
+      worksheet: worksheet?.worksheet || name,
+    }));
+  }
+
+  return result && typeof result === "object" ? [result] : [];
 }
 
 export default function Explore() {
   const location = useLocation();
-  const analysisResults = Array.isArray(location.state?.analysisResults)
-    ? location.state.analysisResults
-    : [];
+  const navigate = useNavigate();
 
   const [files, setFiles] = useState([]);
   const [user, setUser] = useState(null);
+  const [analysisResults, setAnalysisResults] = useState(readSavedAnalysis);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
@@ -54,16 +89,17 @@ export default function Explore() {
     setError("");
 
     try {
-      const { data: authData, error: authError } =
-        await supabase.auth.getUser();
+      const {
+        data: { user: currentUser },
+        error: authError,
+      } = await supabase.auth.getUser();
 
       if (authError) throw authError;
-
-      const currentUser = authData.user;
 
       if (!currentUser) {
         setUser(null);
         setFiles([]);
+        setSelected(null);
         setError("Please sign in to view your private datasets.");
         return;
       }
@@ -81,8 +117,12 @@ export default function Explore() {
       if (queryError) throw queryError;
 
       setFiles(data || []);
+      setSelected((current) => {
+        if (!current) return null;
+        return (data || []).find((file) => file.id === current.id) || null;
+      });
     } catch (err) {
-      setError(err.message || "Unable to load your datasets.");
+      setError(err?.message || "Unable to load your datasets.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -94,13 +134,25 @@ export default function Explore() {
   }, [loadFiles, location.key]);
 
   useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange(() => {
-      // Refresh after sign-in, sign-out, or session changes.
-      loadFiles(true);
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      // Defer the Supabase request until after the auth callback.
+      setTimeout(() => {
+        loadFiles(true);
+      }, 0);
     });
 
-    return () => data.subscription.unsubscribe();
+    return () => subscription.unsubscribe();
   }, [loadFiles]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(analysisResults));
+    } catch (err) {
+      console.error("Could not save analysis results:", err);
+    }
+  }, [analysisResults]);
 
   const filteredFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -112,6 +164,7 @@ export default function Explore() {
         file.original_filename?.toLowerCase().includes(query);
 
       const type = fileType(file).toLowerCase();
+
       const matchesType =
         filter === "all" ||
         (filter === "csv" && type === "csv") ||
@@ -121,9 +174,13 @@ export default function Explore() {
     });
   }, [files, search, filter]);
 
-  const totalBytes = files.reduce(
-    (total, file) => total + Number(file.size_bytes || 0),
-    0
+  const totalBytes = useMemo(
+    () =>
+      files.reduce(
+        (total, file) => total + (Number(file.size_bytes) || 0),
+        0
+      ),
+    [files]
   );
 
   const downloadFile = async (file) => {
@@ -136,23 +193,27 @@ export default function Explore() {
       }
 
       const { data, error: downloadError } = await supabase.storage
-        .from("datasets")
+        .from(BUCKET_NAME)
         .download(file.file_path);
 
       if (downloadError) throw downloadError;
+      if (!data) throw new Error("The downloaded file was empty.");
 
       const objectUrl = URL.createObjectURL(data);
       const anchor = document.createElement("a");
+
       anchor.href = objectUrl;
-      anchor.download = file.original_filename || file.name;
+      anchor.download = file.original_filename || file.name || "dataset";
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(objectUrl);
 
-      setNotice(`Downloaded ${file.name}.`);
+      // Allow the browser to begin the download before releasing the URL.
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+
+      setNotice(`Downloaded ${file.original_filename || file.name}.`);
     } catch (err) {
-      setNotice(err.message || "Download failed. Please try again.");
+      setNotice(err?.message || "Download failed. Please try again.");
     } finally {
       setBusyId(null);
     }
@@ -174,14 +235,12 @@ export default function Explore() {
     setNotice("");
 
     try {
-      // Remove the private Storage object first.
       const { error: storageError } = await supabase.storage
-        .from("datasets")
+        .from(BUCKET_NAME)
         .remove([file.file_path]);
 
       if (storageError) throw storageError;
 
-      // Delete only this user's database record.
       const { error: databaseError } = await supabase
         .from("datasets")
         .delete()
@@ -190,7 +249,7 @@ export default function Explore() {
 
       if (databaseError) {
         throw new Error(
-          `The file was removed from Storage, but its database record could not be deleted: ${databaseError.message}`
+          `The stored file was removed, but its database record could not be deleted: ${databaseError.message}`
         );
       }
 
@@ -204,7 +263,7 @@ export default function Explore() {
 
       setNotice("File and database record deleted successfully.");
     } catch (err) {
-      setNotice(err.message || "Could not delete this file.");
+      setNotice(err?.message || "Could not delete this file.");
     } finally {
       setBusyId(null);
     }
@@ -234,6 +293,7 @@ export default function Explore() {
         .dp-explore button, .dp-explore input, .dp-explore select {
           font: inherit;
         }
+
         .dp-explore button:focus-visible,
         .dp-explore a:focus-visible,
         .dp-explore input:focus-visible,
@@ -286,7 +346,8 @@ export default function Explore() {
           font-weight: 700;
         }
 
-        .ex-nav-link:hover, .ex-nav-link.active { color: var(--ex-ink); }
+        .ex-nav-link:hover,
+        .ex-nav-link.active { color: var(--ex-ink); }
 
         .ex-avatar {
           display: grid;
@@ -377,11 +438,48 @@ export default function Explore() {
           transform: translateY(-2px);
         }
 
+        .ex-primary:disabled,
+        .ex-secondary:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+          transform: none;
+        }
+
         .ex-stats {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 15px;
           margin-bottom: 26px;
+        }
+
+        .ex-stat {
+          min-width: 0;
+          padding: 21px;
+          border: 1px solid var(--ex-line);
+          border-radius: 15px;
+          background: white;
+        }
+
+        .ex-stat-label {
+          color: #5e6b60;
+          font: 11px 'DM Mono', monospace;
+          letter-spacing: .5px;
+          text-transform: uppercase;
+        }
+
+        .ex-stat-value {
+          margin-top: 9px;
+          font-size: clamp(25px, 3vw, 34px);
+          font-weight: 800;
+          letter-spacing: -1.3px;
+          line-height: 1.3;
+          overflow-wrap: anywhere;
+        }
+
+        .ex-stat-caption {
+          margin-top: 5px;
+          color: #687468;
+          font-size: 12px;
         }
 
         .ex-analysis {
@@ -437,36 +535,6 @@ export default function Explore() {
           margin: 12px 0 0;
           padding-left: 20px;
           color: #59665d;
-          font-size: 12px;
-        }
-
-        .ex-stat {
-          min-width: 0;
-          padding: 21px;
-          border: 1px solid var(--ex-line);
-          border-radius: 15px;
-          background: white;
-        }
-
-        .ex-stat-label {
-          color: #5e6b60;
-          font: 11px 'DM Mono', monospace;
-          letter-spacing: .5px;
-          text-transform: uppercase;
-        }
-
-        .ex-stat-value {
-          margin-top: 9px;
-          font-size: clamp(25px, 3vw, 34px);
-          font-weight: 800;
-          letter-spacing: -1.3px;
-          line-height: 1.3;
-          overflow-wrap: anywhere;
-        }
-
-        .ex-stat-caption {
-          margin-top: 5px;
-          color: #687468;
           font-size: 12px;
         }
 
@@ -569,6 +637,7 @@ export default function Explore() {
         }
 
         .ex-refresh:hover { background: #f2f6e9; }
+        .ex-refresh:disabled { opacity: .6; cursor: wait; }
 
         .ex-table-wrap { overflow-x: auto; }
 
@@ -639,6 +708,21 @@ export default function Explore() {
           font-size: 12px;
           font-weight: 800;
           overflow-wrap: anywhere;
+        }
+
+        .ex-file-open {
+          display: block;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          text-align: left;
+          font-family: inherit;
+          cursor: pointer;
+        }
+
+        .ex-file-open:hover {
+          color: #58743d;
+          text-decoration: underline;
         }
 
         .ex-file-sub {
@@ -872,7 +956,10 @@ export default function Explore() {
         @media (max-width: 1000px) {
           .dp-explore { padding: 0 4%; }
           .ex-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .ex-table th, .ex-table td { padding-left: 14px; padding-right: 14px; }
+          .ex-table th, .ex-table td {
+            padding-left: 14px;
+            padding-right: 14px;
+          }
         }
 
         @media (max-width: 650px) {
@@ -884,8 +971,14 @@ export default function Explore() {
           .ex-nav-link { font-size: 11px; }
           .ex-avatar { display: none; }
           .ex-main { padding-top: 34px; }
-          .ex-heading-row { align-items: flex-start; flex-direction: column; }
-          .ex-heading { font-size: clamp(37px, 10vw, 49px); letter-spacing: -2px; }
+          .ex-heading-row {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+          .ex-heading {
+            font-size: clamp(37px, 10vw, 49px);
+            letter-spacing: -2px;
+          }
           .ex-heading-row > .ex-primary { width: 100%; }
           .ex-stat { padding: 15px; }
           .ex-stat-value { font-size: 27px; }
@@ -915,9 +1008,15 @@ export default function Explore() {
         </Link>
 
         <nav className="ex-nav-right" aria-label="Main navigation">
-          <Link to="/dashboard" className="ex-nav-link">Dashboard</Link>
-          <Link to="/explore" className="ex-nav-link active">Explore</Link>
-          <Link to="/upload" className="ex-nav-link">Upload</Link>
+          <Link to="/dashboard" className="ex-nav-link">
+            Dashboard
+          </Link>
+          <Link to="/explore" className="ex-nav-link active">
+            Explore
+          </Link>
+          <Link to="/upload" className="ex-nav-link">
+            Upload
+          </Link>
           <div className="ex-avatar" title="Your private workspace">
             {user?.email?.[0]?.toUpperCase() || "DP"}
           </div>
@@ -951,7 +1050,9 @@ export default function Explore() {
         <section className="ex-stats" aria-label="Dataset statistics">
           <div className="ex-stat">
             <div className="ex-stat-label">Total datasets</div>
-            <div className="ex-stat-value">{loading ? "—" : files.length}</div>
+            <div className="ex-stat-value">
+              {loading ? "—" : files.length}
+            </div>
             <div className="ex-stat-caption">Files in your workspace</div>
           </div>
 
@@ -966,7 +1067,9 @@ export default function Explore() {
           <div className="ex-stat">
             <div className="ex-stat-label">CSV files</div>
             <div className="ex-stat-value">
-              {loading ? "—" : files.filter((f) => fileType(f) === "CSV").length}
+              {loading
+                ? "—"
+                : files.filter((file) => fileType(file) === "CSV").length}
             </div>
             <div className="ex-stat-caption">Comma-separated data</div>
           </div>
@@ -974,7 +1077,11 @@ export default function Explore() {
           <div className="ex-stat">
             <div className="ex-stat-label">Excel files</div>
             <div className="ex-stat-value">
-              {loading ? "—" : files.filter((f) => ["XLS", "XLSX"].includes(fileType(f))).length}
+              {loading
+                ? "—"
+                : files.filter((file) =>
+                    ["XLS", "XLSX"].includes(fileType(file))
+                  ).length}
             </div>
             <div className="ex-stat-caption">Spreadsheet datasets</div>
           </div>
@@ -989,58 +1096,73 @@ export default function Explore() {
         {analysisResults.length > 0 && (
           <section className="ex-analysis" aria-label="Latest analysis results">
             <h2 className="ex-analysis-title">Latest dataset analysis</h2>
+
             {analysisResults.map((item, index) => {
-              const worksheets = item.result?.worksheets
-                ? Object.entries(item.result.worksheets).map(
-                    ([name, result]) => ({
-                      ...result,
-                      worksheet: result.worksheet || name,
-                    })
-                  )
-                : item.result
-                  ? [item.result]
-                  : [];
+              const worksheets = getWorksheets(item?.result);
 
               return (
                 <article
                   className="ex-analysis-file"
-                  key={`${item.fileName}-${index}`}
+                  key={`${item?.fileName || "dataset"}-${index}`}
                 >
-                  <h3 className="ex-analysis-file-title">{item.fileName}</h3>
-                  {item.error ? (
+                  <h3 className="ex-analysis-file-title">
+                    {item?.fileName || "Dataset"}
+                  </h3>
+
+                  {item?.error ? (
                     <p className="ex-analysis-note" role="alert">
                       Analysis unavailable: {item.error}
                     </p>
+                  ) : worksheets.length === 0 ? (
+                    <p className="ex-analysis-note">
+                      No analysis details are available for this dataset.
+                    </p>
                   ) : (
-                    worksheets.map((result) => (
-                      <div key={result.worksheet || item.fileName}>
+                    worksheets.map((result, worksheetIndex) => (
+                      <div
+                        key={`${result.worksheet || "data"}-${worksheetIndex}`}
+                      >
                         {result.worksheet && (
                           <h4 className="ex-analysis-file-title">
                             Worksheet: {result.worksheet}
                           </h4>
                         )}
+
                         <div className="ex-analysis-metrics">
-                          <span>{result.rows} rows</span>
-                          <span>{result.column_count} columns</span>
-                          <span>{result.completeness_percent}% complete</span>
-                          <span>{result.duplicate_rows} duplicate rows</span>
+                          <span>{result.rows ?? "—"} rows</span>
+                          <span>{result.column_count ?? "—"} columns</span>
+                          <span>
+                            {result.completeness_percent ?? "—"}% complete
+                          </span>
+                          <span>{result.duplicate_rows ?? "—"} duplicate rows</span>
                         </div>
-                        <p className="ex-analysis-note">
-                          AI report: {result.ai_analysis?.status || "unavailable"}
-                          {result.ai_analysis?.message
-                            ? ` — ${result.ai_analysis.message}`
-                            : ""}
-                        </p>
-                        {result.ai_analysis?.insights && (
-                          <p className="ex-analysis-report">
-                            {result.ai_analysis.insights}
-                          </p>
+
+                        {result.ai_analysis && (
+                          <>
+                            <p className="ex-analysis-note">
+                              AI report: {result.ai_analysis.status || "available"}
+                              {result.ai_analysis.message
+                                ? ` — ${result.ai_analysis.message}`
+                                : ""}
+                            </p>
+
+                            {result.ai_analysis.insights && (
+                              <p className="ex-analysis-report">
+                                {typeof result.ai_analysis.insights === "string"
+                                  ? result.ai_analysis.insights
+                                  : JSON.stringify(result.ai_analysis.insights, null, 2)}
+                              </p>
+                            )}
+                          </>
                         )}
+
                         {Array.isArray(result.insights) &&
                           result.insights.length > 0 && (
                             <ul className="ex-analysis-facts">
-                              {result.insights.map((insight) => (
-                                <li key={insight}>{insight}</li>
+                              {result.insights.map((insight, insightIndex) => (
+                                <li key={`${insight}-${insightIndex}`}>
+                                  {insight}
+                                </li>
                               ))}
                             </ul>
                           )}
@@ -1061,14 +1183,18 @@ export default function Explore() {
                 UPLOAD HISTORY · PRIVATE TO YOUR ACCOUNT
               </div>
             </div>
+
             <span className="ex-count">
-              {filteredFiles.length} {filteredFiles.length === 1 ? "FILE" : "FILES"}
+              {filteredFiles.length}{" "}
+              {filteredFiles.length === 1 ? "FILE" : "FILES"}
             </span>
           </div>
 
           <div className="ex-toolbar">
             <label className="ex-search-wrap">
-              <span className="ex-search-icon" aria-hidden="true">⌕</span>
+              <span className="ex-search-icon" aria-hidden="true">
+                ⌕
+              </span>
               <input
                 className="ex-search"
                 value={search}
@@ -1102,7 +1228,9 @@ export default function Explore() {
           </div>
 
           {notice && (
-            <div className="ex-message" role="status">{notice}</div>
+            <div className="ex-message" role="status">
+              {notice}
+            </div>
           )}
 
           {error ? (
@@ -1121,24 +1249,30 @@ export default function Explore() {
           ) : loading ? (
             <div className="ex-empty">
               <span className="ex-spinner" />
-              <p className="ex-empty-copy">Loading your private datasets...</p>
+              <p className="ex-empty-copy">
+                Loading your private datasets...
+              </p>
             </div>
           ) : filteredFiles.length === 0 ? (
             <div className="ex-empty">
               <div className="ex-empty-mark">⌁</div>
               <h3 className="ex-empty-title">
-                {files.length === 0 ? "Your library starts here" : "No matching files"}
+                {files.length === 0
+                  ? "Your library starts here"
+                  : "No matching files"}
               </h3>
               <p className="ex-empty-copy">
                 {files.length === 0
                   ? "Upload your first CSV or Excel file. Once saved, it will appear here with its file details and available actions."
                   : "Try a different search term or change the file-type filter."}
               </p>
+
               {files.length === 0 && (
                 <Link to="/upload" className="ex-primary">
                   Upload your first dataset ↗
                 </Link>
               )}
+
               {(search || filter !== "all") && files.length > 0 && (
                 <button
                   className="ex-secondary"
@@ -1164,32 +1298,49 @@ export default function Explore() {
                     <th>Actions</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {filteredFiles.map((file) => (
                     <tr key={file.id}>
                       <td>
                         <div className="ex-file-cell">
                           <FileIcon type={fileType(file)} />
+
                           <div>
-                            <div className="ex-file-name">
+                            <button
+                              type="button"
+                              className="ex-file-name ex-file-open"
+                              onClick={() =>
+                                navigate(`/dashboard/${file.id}`)
+                              }
+                              aria-label={`Analyze ${
+                                file.original_filename || file.name
+                              }`}
+                            >
                               {file.original_filename || file.name}
-                            </div>
+                              <span aria-hidden="true"> ↗</span>
+                            </button>
+
                             <div className="ex-file-sub">
-                              {fileType(file)} · {file.row_count != null
-                                ? `${file.row_count.toLocaleString()} rows`
+                              {fileType(file)} ·{" "}
+                              {file.row_count != null
+                                ? `${Number(file.row_count).toLocaleString()} rows`
                                 : "Row count not analyzed"}
                             </div>
                           </div>
                         </div>
                       </td>
-                      <td>{formatSize(Number(file.size_bytes || 0))}</td>
+
+                      <td>{formatSize(file.size_bytes)}</td>
                       <td>{formatDate(file.created_at)}</td>
+
                       <td>
                         <span className="ex-status">
                           <span aria-hidden="true">●</span>
                           {file.status || "uploaded"}
                         </span>
                       </td>
+
                       <td>
                         <div className="ex-actions">
                           <button
@@ -1201,6 +1352,7 @@ export default function Explore() {
                           >
                             ⓘ
                           </button>
+
                           <button
                             type="button"
                             className="ex-action"
@@ -1211,6 +1363,7 @@ export default function Explore() {
                           >
                             ↓
                           </button>
+
                           <button
                             type="button"
                             className="ex-action danger"
@@ -1240,6 +1393,7 @@ export default function Explore() {
                   {selected.original_filename || selected.name}
                 </h2>
               </div>
+
               <button
                 type="button"
                 className="ex-close"
@@ -1255,32 +1409,44 @@ export default function Explore() {
                 <div className="ex-detail-label">File type</div>
                 <div className="ex-detail-value">{fileType(selected)}</div>
               </div>
+
               <div className="ex-detail">
                 <div className="ex-detail-label">File size</div>
                 <div className="ex-detail-value">
-                  {formatSize(Number(selected.size_bytes || 0))}
+                  {formatSize(selected.size_bytes)}
                 </div>
               </div>
+
               <div className="ex-detail">
                 <div className="ex-detail-label">Upload date</div>
-                <div className="ex-detail-value">{formatDate(selected.created_at)}</div>
+                <div className="ex-detail-value">
+                  {formatDate(selected.created_at)}
+                </div>
               </div>
+
               <div className="ex-detail">
                 <div className="ex-detail-label">Upload status</div>
-                <div className="ex-detail-value">{selected.status || "uploaded"}</div>
+                <div className="ex-detail-value">
+                  {selected.status || "uploaded"}
+                </div>
               </div>
+
               <div className="ex-detail">
                 <div className="ex-detail-label">Rows</div>
                 <div className="ex-detail-value">
                   {selected.row_count == null
                     ? "Not analyzed yet"
-                    : selected.row_count.toLocaleString()}
+                    : Number(selected.row_count).toLocaleString()}
                 </div>
               </div>
+
               <div className="ex-detail">
                 <div className="ex-detail-label">MIME type</div>
-                <div className="ex-detail-value">{selected.mime_type || "Not provided"}</div>
+                <div className="ex-detail-value">
+                  {selected.mime_type || "Not provided"}
+                </div>
               </div>
+
               <div className="ex-detail" style={{ gridColumn: "1 / -1" }}>
                 <div className="ex-detail-label">Dataset ID</div>
                 <div className="ex-detail-value">{selected.id}</div>
@@ -1296,6 +1462,7 @@ export default function Explore() {
               >
                 ↓ Download original
               </button>
+
               <button
                 type="button"
                 className="ex-secondary"
@@ -1303,6 +1470,14 @@ export default function Explore() {
                 onClick={() => deleteFile(selected)}
               >
                 Delete dataset
+              </button>
+
+              <button
+                type="button"
+                className="ex-secondary"
+                onClick={() => navigate(`/dashboard/${selected.id}`)}
+              >
+                Analyze dataset ↗
               </button>
             </div>
           </section>
